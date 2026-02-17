@@ -1,0 +1,40 @@
+services:
+  postgres:                               # Database
+    image: postgres:15
+    container_name: ytbot_postgres
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASS}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - ${DATABASE_VOLUME}:/var/lib/postgresql/data
+    networks:
+      - ytbot-network
+    restart: unless-stopped
+
+  bot:                                   # Discord bot
+    build: .
+    container_name: ytbot
+    environment:
+      - DISCORD_API_TOKEN=${DISCORD_API_TOKEN}
+      - JELLYFIN_API_TOKEN=${JELLYFIN_API_TOKEN}
+      - DB_URL=${DB_URL}
+      - JELLYFIN_URL=${JELLYFIN_URL}
+      - TARGET_CHANNEL_IDS=${TARGET_CHANNEL_IDS}
+      - DOWNLOAD_DIR=/downloads/
+    env_file:
+      - .env
+    volumes:
+      - ${DOWNLOAD_VOLUME}:/downloads/         # mount host folder to container
+    depends_on:
+      - postgres
+    networks:
+      - ytbot-network
+    restart: unless-stopped
+
+volumes:
+  ytbot_data:
+
+networks:
+  ytbot-network:
+  
