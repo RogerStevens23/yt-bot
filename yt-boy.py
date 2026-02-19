@@ -93,14 +93,27 @@ async def on_reaction_add(reaction, user):
     message = reaction.message
 
     # Deletion of video Logic
-    if hasattr(bot, "delete_messages") and message.id in bot.delete_messages:
-        if reaction.emoji == "🖕🏻":
-            title = bot.delete_messages.pop(message.id) # pop removes and returns item from list FILO
-            print("THIS IS TITLE FROM ON_REACTION: ")
-            print(title)
-            await perform_video_deletion(message.channel, title)
-            await message.delete()
-        return
+    for entry in bot.delete_messages:
+        if entry["message"].id == message.id:
+            await perform_video_deletion(message.channel, entry["title"])
+
+            for e in bot.delete_messages:
+                await e["message"].delete()
+            
+            bot.delete_messages.clear()
+            break
+
+    # if hasattr(bot, "delete_messages") and message.id in bot.delete_messages:
+    #     if reaction.emoji == "🖕🏻":
+    #         data = bot.delete_messages.pop(message.id)
+    #         title = data["title"]
+    #         await perform_video_deletion(message.channel, title)
+
+    #         # Delete ALL list messages
+    #         for entry in bot.delete_messages.values():
+    #             await entry["message"].delete()
+            
+    #         bot.delete_messages.clear()
 
     # Approval of video Logic
     if reaction.message.channel.id == TARGET_CHANNEL_IDS[1]:
@@ -244,21 +257,27 @@ def delete_video_from_server(file_path):
         print(f"File '{file_path}' has been deleted successfully.")
     except FileNotFoundError:
         print(f"Error: The file '{file_path}' does not exist.")
+        raise FileNotFoundError(f"Error: The file '{file_path}' does not exist.")
     except PermissionError:
         print(f"Error: Permission denied to delete the file '{file_path}'. Ensure the file is not open and you have the necessary permissions.")
+        raise PermissionError(f"Error: Permission denied to delete the file '{file_path}'. Ensure the file is not open and you have the necessary permissions.")
     except Exception as e:
         print(f"An unexpected error occurred in os.remove: {e}")
+        raise Exception(f"An unexpected error occurred in os.remove: {e}")
 
 async def list_downloaded_videos_for_deletion(ctx):
     if not hasattr(bot, "delete_messages"):
-        bot.delete_messages = {}
+        bot.delete_messages = []
 
     downloaded = await bot.db.fetch(
         "SELECT title FROM youtube_links WHERE status='downloaded'")
     for video in downloaded:
         msg = await ctx.channel.send(video['title'])
         await msg.add_reaction("🖕🏻")
-        bot.delete_messages[msg.id] = video['title']
+        bot.delete_messages.append({
+            "title": video['title'],
+            "message": msg
+        })
     
 async def perform_video_deletion(channel, title: str):
     file_path = str(DOWNLOAD_DIR / title)
@@ -277,6 +296,9 @@ async def perform_video_deletion(channel, title: str):
         await channel.send(
             f"Video `{title}` deleted and Jellyfin rescan triggered!"
         )
+    except FileNotFoundError:
+        print("File not found")
+        await channel.send(f"The file {title} does not exist...")
     except Exception as e:
         print(f"An unexpected error occurred in perform_video_deletion: {e}")
     
