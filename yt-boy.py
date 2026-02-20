@@ -301,26 +301,6 @@ async def perform_video_deletion(channel, title: str):
         await channel.send(f"The file {title} does not exist...")
     except Exception as e:
         print(f"An unexpected error occurred in perform_video_deletion: {e}")
-    
-
-## BOT COMMANDS ##
-
-
-# @bot.command()
-# @commands.has_permissions(manage_messages=True)
-# async def test(ctx):
-#     try:
-#         print("ARG is empty, giving list...")
-#         messages = await list_downloaded_videos_for_deletion(ctx)
-#         for msg in messages:
-#             print("==================================================================")
-#             print("MESSAGE ID IN TEST: ")
-#             print(msg)
-#             print("==================================================================")
-#             await asyncio.sleep(0.5)
-
-#     except Exception as e:
-#         print(f"An unexpected error occurred in test: {e}")
 
 @bot.command()
 @commands.has_permissions(manage_messages=True)
@@ -361,6 +341,33 @@ async def get_db(ctx):
             f.write(f"{url}\n")
             await asyncio.sleep(0.1)
     await channel.send("URLS of downloaded videos...", file=discord.File("downloaded-links.txt"))
+
+@bot.command()
+@commands.has_permissions(manage_messages=True)
+async def status(ctx):
+    try:    
+        status_count = []
+        print("Obtaining status...")
+        pending = await bot.db.fetch(
+            "SELECT id FROM youtube_links WHERE status='pending_approval'"
+        )
+        status_count.append(len(pending))
+        approved = await bot.db.fetch(
+            "SELECT id FROM youtube_links WHERE status='approved'"
+        )
+        status_count.append(len(approved))
+        rejected = await bot.db.fetch(
+            "SELECT id FROM youtube_links WHERE status='rejected'"
+        )
+        status_count.append(len(rejected))
+        downloaded = await bot.db.fetch(
+            "SELECT id FROM youtube_links WHERE status='downloaded'"
+        )
+        status_count.append(len(downloaded))
+        await ctx.send(f":STATUS: Pending_Approval[{status_count[0]}] :: Approved[{status_count[1]}] :: Rejected[{status_count[2]}] :: Downloaded[{status_count[3]}]")
+        status_count.clear()
+    except Exception as e:
+        print(f"An unexpected error occurred in status: {e}")
 
 @bot.command()
 @commands.has_permissions(manage_messages=True,read_message_history=True)
