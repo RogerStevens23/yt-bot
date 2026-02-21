@@ -41,10 +41,6 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 client = discord.Client(intents=intents)
 
-# Global variables
-original_message = ''
-review_message = ''
-final_title = ''
 # yt-dlp options
 ydl_opts = {
     "outtmpl": str(DOWNLOAD_DIR / "%(title)s.%(ext)s"),
@@ -62,6 +58,12 @@ async def on_ready():
     print(f'We have logged in as {bot.user}')
     print(f"Bot ready and connected to Postgres at {DB_HOST}")
     bot.loop.create_task(download_approved_videos())
+    bot.link_messages = []
+    print("bot.link_messages list created!")
+    bot.delete_messages = []
+    print("bot.delete_messages list created!")
+    bot.video_title = ''
+    print("bot.video_title has been created!")
 
 
 # On event in the channel, in this case messages.
@@ -77,9 +79,10 @@ async def on_message(message):
         matches = detect_links.Regex.search_for_youtube_link(message.content)
         if matches:
             for url in matches:
-                global original_message
-                original_message = message
                 await store_link(bot.db, url)
+            
+            print("ADDING MESSAGE TO LINK_MESSAGES IN ON_MESSAGE!!!")
+            bot.link_messages.append({"message": message})
 
 
     # Make sure commands still work
@@ -93,27 +96,15 @@ async def on_reaction_add(reaction, user):
     message = reaction.message
 
     # Deletion of video Logic
-    for entry in bot.delete_messages:
-        if entry["message"].id == message.id:
-            await perform_video_deletion(message.channel, entry["title"])
+    if(len(bot.delete_messages != 0)):
+        for entry in bot.delete_messages:
+            if entry["message"].id == message.id:
+                await perform_video_deletion(message.channel, entry["title"])
+                for e in bot.delete_messages:
+                    await e["message"].delete()
+                    bot.delete_messages.clear()
+                    break
 
-            for e in bot.delete_messages:
-                await e["message"].delete()
-            
-            bot.delete_messages.clear()
-            break
-
-    # if hasattr(bot, "delete_messages") and message.id in bot.delete_messages:
-    #     if reaction.emoji == "🖕🏻":
-    #         data = bot.delete_messages.pop(message.id)
-    #         title = data["title"]
-    #         await perform_video_deletion(message.channel, title)
-
-    #         # Delete ALL list messages
-    #         for entry in bot.delete_messages.values():
-    #             await entry["message"].delete()
-            
-    #         bot.delete_messages.clear()
 
     # Approval of video Logic
     if reaction.message.channel.id == TARGET_CHANNEL_IDS[1]:
@@ -177,8 +168,6 @@ async def store_link(db, url):
 
         # Send to review channel
         await send_to_review_channel(url)
-        
-
     except Exception as e:
         print("Error storing link:", e)
 
@@ -202,19 +191,19 @@ async def download_approved_videos():
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     ydl.download([url])
                     info = ydl.extract_info(url, download=True)
-                    global video_title
-                    video_title = ydl.prepare_filename(info)
+                    bot.video_title = ydl.prepare_filename(info)
+                    print("video_title: "+bot.video_title)
                 
                 # Update DB
                 await bot.db.execute(
                     "UPDATE youtube_links SET status='downloaded' WHERE url=$1", url
                 )
                 await bot.db.execute(
-                    "UPDATE youtube_links SET title=$2 WHERE url=$1", url, Path(video_title).name
+                    "UPDATE youtube_links SET title=$2 WHERE url=$1", url, Path(bot.video_title).name
                 )
                 print(f"Download complete: {url}")
                 await trigger_jellyfin_scan()
-                await delete_downloaded_link_channel_messages(original_message, review_message)
+                await delete_downloaded_link_channel_messages(url)
 
             except Exception as e:
                 print(f"Error downloading {url}: {e}")
@@ -222,26 +211,30 @@ async def download_approved_videos():
         # Wait before checking again
         await asyncio.sleep(60)  # check every minute
 
-async def delete_downloaded_link_channel_messages(message1, message2):
+async def delete_downloaded_link_channel_messages(url):
     try:
-        await message1.delete() # delete link message
-        await message2.delete()
+        for i in range(len(bot.link_messages)):
+        #for msg in bot.link_messages:
+            if url in bot.link_messages[i]["message"].content:
+                print("URL found in message!")
+                await bot.link_messages[i]["message"].delete()
         print("Messages deleted!")
-    except:
-        print("Error deleting channel messages...")
+    
+    except Exception as e:
+        print(f"An unexpected error occurred in delete_downloaded_link_channel_messages: {e}")
+
     for id in TARGET_CHANNEL_IDS:
         channel = bot.get_channel(id)
-        await channel.send(f"{Path(video_title).name} downloaded and library scan triggered!")
+        await channel.send(f"{Path(bot.video_title).name} downloaded and library scan triggered!")
 
 async def send_to_review_channel(url: str):
     # Send to review channel
         channel = bot.get_channel(TARGET_CHANNEL_IDS[1])
         if channel:
             msg = await channel.send(f"New YouTube link pending approval: {url}")
-            global review_message
-            review_message = msg
             await msg.add_reaction("✅")
             await msg.add_reaction("❌")
+            bot.link_messages.append({"message": msg})
 
 async def trigger_jellyfin_scan():
     url = f"{JELLYFIN_URL}/Library/Refresh?/LibraryId={JELLYFIN_LIBRARY_ID}"
@@ -328,19 +321,31 @@ async def delete_video(ctx, arg: str = None):
 
 @bot.command()
 @commands.has_permissions(manage_messages=True)
-async def get_db(ctx):
+async def get_link_messages(ctx):
+    print("================================================================================")
+    print("::::::LINK_MESSAGES::::::")
+    for msg in bot.link_messages:
+        print("::::::MESSAGE OBJECT::::::")
+        print(msg)
+        print("::::::MESSAGE CONTENT::::::")
+        print(msg['message'].content)
+    print("================================================================================")
+
+@bot.command()
+@commands.has_permissions(manage_messages=True)
+async def get_db(ctx, arg: str):
     channel = ctx.channel
-    downloaded = await bot.db.fetch(
-            "SELECT url FROM youtube_links WHERE status='downloaded'"
-    )
-    print("list of db links collected!")
-    print(downloaded)
-    with open ("downloaded-links.txt", 'w') as f:
-        for link in downloaded:
-            url = link['url']
-            f.write(f"{url}\n")
-            await asyncio.sleep(0.1)
-    await channel.send("URLS of downloaded videos...", file=discord.File("downloaded-links.txt"))
+    if(arg == "downloaded" or arg == "pending_approval" or arg == "approved" or arg == "rejected"):
+        links = await bot.db.fetch(
+            "SELECT url FROM youtube_links WHERE status=$1", arg)
+        print("list of db links collected!")
+        print(links)
+        with open ("links.txt", 'w') as f:
+            for link in links:
+                url = link['url']
+                f.write(f"{url}\n")
+                await asyncio.sleep(0.1)
+        await channel.send(f"URLS of {arg} videos...", file=discord.File("links.txt"))
 
 @bot.command()
 @commands.has_permissions(manage_messages=True)
