@@ -95,12 +95,15 @@ async def on_reaction_add(reaction, user):
             message = reaction.message
 
             # Deletion of video Logic
-            if(len(bot.delete_messages) != 0):
-                for entry in bot.delete_messages:
-                    if entry["message"].id == message.id:
-                        await perform_video_deletion(message.channel, entry["title"])
-                        for e in bot.delete_messages:
-                            await e["message"].delete()
+            if reaction.emoji == "🖕🏻":
+                if(len(bot.delete_messages) != 0):
+                    for entry in bot.delete_messages:
+                        if entry["message"].id == message.id:
+                            print("MESSAGE ID FOUND AND ATTEMPTING VIDEO DELETION")
+                            await perform_video_deletion(message.channel, entry["title"])
+                            print("VIDEO DELETION PERFORMED")
+                            for e in bot.delete_messages:
+                                await e["message"].delete()
                             bot.delete_messages.clear()
                             break
 
