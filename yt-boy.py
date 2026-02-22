@@ -79,55 +79,61 @@ async def on_message(message):
         matches = detect_links.Regex.search_for_youtube_link(message.content)
         if matches:
             for url in matches:
-                await store_link(bot.db, url)
+                await store_link(bot.db, url, message)
             
             print("ADDING MESSAGE TO LINK_MESSAGES IN ON_MESSAGE!!!")
             bot.link_messages.append({"message": message})
-
+    
 
     # Make sure commands still work
     await bot.process_commands(message)
 
 @bot.event
 async def on_reaction_add(reaction, user):
-    if user.bot:
-        return  # ignore bot reactions
+    if not user.bot:
+        try:
+            message = reaction.message
 
-    message = reaction.message
+            # Deletion of video Logic
+            if(len(bot.delete_messages) != 0):
+                for entry in bot.delete_messages:
+                    if entry["message"].id == message.id:
+                        await perform_video_deletion(message.channel, entry["title"])
+                        for e in bot.delete_messages:
+                            await e["message"].delete()
+                            bot.delete_messages.clear()
+                            break
 
-    # Deletion of video Logic
-    if(len(bot.delete_messages != 0)):
-        for entry in bot.delete_messages:
-            if entry["message"].id == message.id:
-                await perform_video_deletion(message.channel, entry["title"])
-                for e in bot.delete_messages:
-                    await e["message"].delete()
-                    bot.delete_messages.clear()
-                    break
+            # Approval of video Logic
+            if reaction.message.channel.id == TARGET_CHANNEL_IDS[1]:
+                url_text = reaction.message.content.split()[-1]  # crude way to extract URL
+                # Check current status
+                current_status = await bot.db.fetchval(
+                    "SELECT status FROM youtube_links WHERE url=$1", url_text
+                )
+                if current_status != "pending_approval":
+                    print(f"Reaction ignored; link already {current_status}: {url_text}")
+                    await bot.get_channel(message.channel.id).send(f"Link has already been {current_status}...")
+                    return
+                    #TODO send printout to channel.
 
-
-    # Approval of video Logic
-    if reaction.message.channel.id == TARGET_CHANNEL_IDS[1]:
-        url_text = reaction.message.content.split()[-1]  # crude way to extract URL
-        # Check current status
-        current_status = await bot.db.fetchval(
-            "SELECT status FROM youtube_links WHERE url=$1", url_text
-        )
-        if current_status != "pending_approval":
-            print(f"Reaction ignored; link already {current_status}: {url_text}")
-            return
-
-        # Update based on reaction
-        if reaction.emoji == "✅":
-            await bot.db.execute(
-                "UPDATE youtube_links SET status='approved' WHERE url=$1", url_text
-            )
-            print(f"Link approved: {url_text}")
-        elif reaction.emoji == "❌":
-            await bot.db.execute(
-                "UPDATE youtube_links SET status='rejected' WHERE url=$1", url_text
-            )
-            print(f"Link rejected: {url_text}")
+                # Update based on reaction
+                if reaction.emoji == "✅":
+                    await bot.db.execute(
+                        "UPDATE youtube_links SET status='approved' WHERE url=$1", url_text
+                    )
+                    print(f"Link approved: {url_text}")
+                elif reaction.emoji == "❌":
+                    await bot.db.execute(
+                        "UPDATE youtube_links SET status='rejected' WHERE url=$1", url_text
+                    )
+                    print(f"Link rejected: {url_text}")
+                    await bot.get_channel(message.channel.id).send(f"Link has been rejected!")
+                    await message.delete()
+        except Exception as e:
+            print(f"An unexpected error occurred in on_reaction_add: {e}")
+    else:
+        return
 
 
 # Initialize postgres database
@@ -148,7 +154,7 @@ async def init_db():
     return db
 
 # Store link into database
-async def store_link(db, url):
+async def store_link(db, url, message):
     try:
         existing = await bot.db.fetchrow(
             "SELECT status FROM youtube_links WHERE url = $1",
@@ -157,6 +163,8 @@ async def store_link(db, url):
 
         if existing:
             print(f"Link already exists ({existing['status']}), ignoring: {url}")
+            await bot.get_channel(message.channel.id).send(f"Link already exists ({existing['status']}), ignoring video...")
+            await message.delete()
             return
         
         # Insert into DB
@@ -295,6 +303,28 @@ async def perform_video_deletion(channel, title: str):
     except Exception as e:
         print(f"An unexpected error occurred in perform_video_deletion: {e}")
 
+
+## BOT COMMANDS ##
+@bot.command()
+@commands.has_permissions(manage_messages=True)
+async def get_links(ctx):
+    channel = ctx.channel
+    if(channel.id == TARGET_CHANNEL_IDS[0]):
+        async for msg in channel.history(limit=None):
+            matches = detect_links.Regex.search_for_youtube_link(msg.content)
+            if matches:
+                for url in matches:
+                    await store_link(bot.db, url)
+                    print("Link stored from get link.")
+  
+@bot.command()
+@commands.has_permissions(manage_messages=True)
+async def get_pending(ctx):
+    pending_approval = await bot.db.fetch(
+        "SELECT url FROM youtube_links WHERE status='pending_approval'")
+    for url in pending_approval:
+        await send_to_review_channel(url["url"])
+
 @bot.command()
 @commands.has_permissions(manage_messages=True)
 async def delete_video(ctx, arg: str = None):
@@ -411,7 +441,7 @@ async def scan_to_textfile(ctx):
             await asyncio.sleep(0.1)
     await channel.send("Chat history in a textfile!", file=discord.File("chat_history.txt"))
 
-@bot.command() # Delete this bot's messages
+@bot.command()
 @commands.has_permissions(manage_messages=True)
 async def delete_bot_chats(ctx):
     channel = ctx.channel
@@ -439,7 +469,6 @@ async def whereami(ctx):
     )
     await ctx.send("Printed location to logs!")
 
-# Delete Youtube links
 @bot.command()
 @commands.has_permissions(manage_messages=True)
 async def delete_youtube_links(ctx):
@@ -492,7 +521,6 @@ async def reinstate_video(ctx, url: str = None):
 
     await send_to_review_channel(url)
     await ctx.send("Link reinstated and sent for approval.")
-
 
 # Start the bot with the bot TOKEN and log level as debug
 bot.run(DISCORD_TOKEN, log_handler=handler, log_level=logging.DEBUG, root_logger=True)
