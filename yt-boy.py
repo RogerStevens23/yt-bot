@@ -11,13 +11,10 @@ import requests
 from pathlib import Path
 from dotenv import load_dotenv
 from discord.ext import commands
-from zoneinfo import ZoneInfo  # built-in, no extra install needed
+from zoneinfo import ZoneInfo
 
 # Download directory from .env
 DOWNLOAD_DIR = Path(os.getenv("DOWNLOAD_DIR", "/downloads/"))
-
-# Logging, text output to discord.log file
-handler = logging.FileHandler(filename='discord.log', encoding='utf-8', mode='w')
 
 # Load .env
 load_dotenv()
@@ -26,7 +23,7 @@ JELLYFIN_API_TOKEN = os.getenv("JELLYFIN_API_TOKEN")
 DB_HOST = os.getenv("DB_HOST")
 DB_URL = os.getenv("DB_URL")
 JELLYFIN_URL = os.getenv("JELLYFIN_URL")
-JELLYFIN_LIBRARY_ID = os.getenv("JELLYFIN_LIBRARY_ID")  # Skate-Movies
+JELLYFIN_LIBRARY_ID = os.getenv("JELLYFIN_LIBRARY_ID")
 
 # Parse channel ID's
 TARGET_CHANNEL_IDS = [int(x) for x in os.environ.get("TARGET_CHANNEL_IDS", "").split(",") if x]
@@ -39,7 +36,6 @@ intents.message_content = True
 intents.guilds = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
-client = discord.Client(intents=intents)
 
 # yt-dlp options
 ydl_opts = {
@@ -80,11 +76,8 @@ async def on_message(message):
         if matches:
             for url in matches:
                 await store_link(bot.db, url, message)
-            
             print("ADDING MESSAGE TO LINK_MESSAGES IN ON_MESSAGE!!!")
             bot.link_messages.append({"message": message})
-    
-
     # Make sure commands still work
     await bot.process_commands(message)
 
@@ -99,9 +92,7 @@ async def on_reaction_add(reaction, user):
                 if(len(bot.delete_messages) != 0):
                     for entry in bot.delete_messages:
                         if entry["message"].id == message.id:
-                            print("MESSAGE ID FOUND AND ATTEMPTING VIDEO DELETION")
                             await perform_video_deletion(message.channel, entry["title"])
-                            print("VIDEO DELETION PERFORMED")
                             for e in bot.delete_messages:
                                 await e["message"].delete()
                             bot.delete_messages.clear()
@@ -111,25 +102,17 @@ async def on_reaction_add(reaction, user):
             if reaction.message.channel.id == TARGET_CHANNEL_IDS[1]:
                 url_text = reaction.message.content.split()[-1]  # crude way to extract URL
                 # Check current status
-                current_status = await bot.db.fetchval(
-                    "SELECT status FROM youtube_links WHERE url=$1", url_text
-                )
+                current_status = await bot.db.fetchval("SELECT status FROM youtube_links WHERE url=$1", url_text)
                 if current_status != "pending_approval":
                     print(f"Reaction ignored; link already {current_status}: {url_text}")
                     await bot.get_channel(message.channel.id).send(f"Link has already been {current_status}...")
                     return
-                    #TODO send printout to channel.
-
                 # Update based on reaction
                 if reaction.emoji == "✅":
-                    await bot.db.execute(
-                        "UPDATE youtube_links SET status='approved' WHERE url=$1", url_text
-                    )
+                    await bot.db.execute("UPDATE youtube_links SET status='approved' WHERE url=$1", url_text)
                     print(f"Link approved: {url_text}")
                 elif reaction.emoji == "❌":
-                    await bot.db.execute(
-                        "UPDATE youtube_links SET status='rejected' WHERE url=$1", url_text
-                    )
+                    await bot.db.execute("UPDATE youtube_links SET status='rejected' WHERE url=$1", url_text)
                     print(f"Link rejected: {url_text}")
                     await bot.get_channel(message.channel.id).send(f"Link has been rejected!")
                     await message.delete()
@@ -159,10 +142,7 @@ async def init_db():
 # Store link into database
 async def store_link(db, url, message):
     try:
-        existing = await bot.db.fetchrow(
-            "SELECT status FROM youtube_links WHERE url = $1",
-            url
-        )
+        existing = await bot.db.fetchrow("SELECT status FROM youtube_links WHERE url = $1", url)
 
         if existing:
             print(f"Link already exists ({existing['status']}), ignoring: {url}")
@@ -171,10 +151,7 @@ async def store_link(db, url, message):
             return
         
         # Insert into DB
-        await db.execute(
-            "INSERT INTO youtube_links(url, status) VALUES($1, 'pending_approval') ON CONFLICT(url) DO NOTHING",
-            url
-        )
+        await db.execute("INSERT INTO youtube_links(url, status) VALUES($1, 'pending_approval') ON CONFLICT(url) DO NOTHING", url)
         print(f"Stored link in DB: {url}")
 
         # Send to review channel
@@ -186,9 +163,7 @@ async def download_approved_videos():
     await bot.wait_until_ready()
     while not bot.is_closed():
         # Fetch approved links
-        approved_links = await bot.db.fetch(
-            "SELECT url FROM youtube_links WHERE status='approved'"
-        )
+        approved_links = await bot.db.fetch("SELECT url FROM youtube_links WHERE status='approved'")
 
         for record in approved_links:
             url = record["url"]
@@ -206,12 +181,8 @@ async def download_approved_videos():
                     print("video_title: "+bot.video_title)
                 
                 # Update DB
-                await bot.db.execute(
-                    "UPDATE youtube_links SET status='downloaded' WHERE url=$1", url
-                )
-                await bot.db.execute(
-                    "UPDATE youtube_links SET title=$2 WHERE url=$1", url, Path(bot.video_title).name
-                )
+                await bot.db.execute("UPDATE youtube_links SET status='downloaded' WHERE url=$1", url)
+                await bot.db.execute("UPDATE youtube_links SET title=$2 WHERE url=$1", url, Path(bot.video_title).name)
                 print(f"Download complete: {url}")
                 await trigger_jellyfin_scan()
                 await delete_downloaded_link_channel_messages(url)
@@ -273,8 +244,7 @@ async def list_downloaded_videos_for_deletion(ctx):
     if not hasattr(bot, "delete_messages"):
         bot.delete_messages = []
 
-    downloaded = await bot.db.fetch(
-        "SELECT title FROM youtube_links WHERE status='downloaded'")
+    downloaded = await bot.db.fetch("SELECT title FROM youtube_links WHERE status='downloaded'")
     for video in downloaded:
         msg = await ctx.channel.send(video['title'])
         await msg.add_reaction("🖕🏻")
@@ -289,17 +259,9 @@ async def perform_video_deletion(channel, title: str):
     print("<<<ATTEMPTING DELETION>>>")
     try:
         delete_video_from_server(file_path)
-
-        await bot.db.execute(
-            "DELETE FROM youtube_links WHERE title=$1",
-            title
-        )
-
+        await bot.db.execute("DELETE FROM youtube_links WHERE title=$1", title) # Delete from db.
         await trigger_jellyfin_scan()
-
-        await channel.send(
-            f"Video `{title}` deleted and Jellyfin rescan triggered!"
-        )
+        await channel.send(f"Video `{title}` deleted and Jellyfin rescan triggered!")
     except FileNotFoundError:
         print("File not found")
         await channel.send(f"The file {title} does not exist...")
@@ -323,8 +285,7 @@ async def get_links(ctx):
 @bot.command()
 @commands.has_permissions(manage_messages=True)
 async def get_pending(ctx):
-    pending_approval = await bot.db.fetch(
-        "SELECT url FROM youtube_links WHERE status='pending_approval'")
+    pending_approval = await bot.db.fetch("SELECT url FROM youtube_links WHERE status='pending_approval'")
     for url in pending_approval:
         await send_to_review_channel(url["url"])
 
@@ -335,20 +296,15 @@ async def delete_video(ctx, arg: str = None):
         if(arg == None):
             print("ARG is empty, giving list...")
             await list_downloaded_videos_for_deletion(ctx)
-
         elif(arg.startswith("https://")):
             print("arg is a link, finding title...")
-            title = await bot.db.fetchrow(                                 # Delete from db.
-            "SELECT title FROM youtube_links WHERE url=$1", arg)
-            print("THIS IS THE TITLE FROM URL: ")
+            title = await bot.db.fetchrow("SELECT title FROM youtube_links WHERE url=$1", arg) 
             print(title[0])
             title = title[0]
             await perform_video_deletion(ctx.channel, title)
-
         else:
             print("THIS IS THE TITLE FROM ARG: "+arg)
             await perform_video_deletion(ctx.channel, arg)
-
     except Exception as e:
         print(f"An unexpected error occurred in delete_video: {e}")
 
@@ -369,8 +325,7 @@ async def get_link_messages(ctx):
 async def get_db(ctx, arg: str):
     channel = ctx.channel
     if(arg == "downloaded" or arg == "pending_approval" or arg == "approved" or arg == "rejected"):
-        links = await bot.db.fetch(
-            "SELECT url FROM youtube_links WHERE status=$1", arg)
+        links = await bot.db.fetch("SELECT url FROM youtube_links WHERE status=$1", arg)
         print("list of db links collected!")
         print(links)
         with open ("links.txt", 'w') as f:
@@ -386,21 +341,13 @@ async def status(ctx):
     try:    
         status_count = []
         print("Obtaining status...")
-        pending = await bot.db.fetch(
-            "SELECT id FROM youtube_links WHERE status='pending_approval'"
-        )
+        pending = await bot.db.fetch("SELECT id FROM youtube_links WHERE status='pending_approval'")
         status_count.append(len(pending))
-        approved = await bot.db.fetch(
-            "SELECT id FROM youtube_links WHERE status='approved'"
-        )
+        approved = await bot.db.fetch("SELECT id FROM youtube_links WHERE status='approved'")
         status_count.append(len(approved))
-        rejected = await bot.db.fetch(
-            "SELECT id FROM youtube_links WHERE status='rejected'"
-        )
+        rejected = await bot.db.fetch("SELECT id FROM youtube_links WHERE status='rejected'")
         status_count.append(len(rejected))
-        downloaded = await bot.db.fetch(
-            "SELECT id FROM youtube_links WHERE status='downloaded'"
-        )
+        downloaded = await bot.db.fetch("SELECT id FROM youtube_links WHERE status='downloaded'")
         status_count.append(len(downloaded))
         await ctx.send(f":STATUS: Pending_Approval[{status_count[0]}] :: Approved[{status_count[1]}] :: Rejected[{status_count[2]}] :: Downloaded[{status_count[3]}]")
         status_count.clear()
@@ -410,21 +357,17 @@ async def status(ctx):
 @bot.command()
 @commands.has_permissions(manage_messages=True,read_message_history=True)
 async def delete_all_chats(ctx):
-    
     print('Attempting to delete history...')
     try:
         deleted = await ctx.channel.purge(bulk=True)
         await ctx.channel.send(f'Deleted {len(deleted)} message(s)')
-
     except:
         print("couldn't delete channel message history...")
 
 @bot.command()
 async def scan_chat_history(ctx):
     channel = ctx.channel
-
     eastern = ZoneInfo("America/New_York")
-
     async for message in channel.history(limit=None):
         est_time = message.created_at.replace(tzinfo=ZoneInfo("UTC")).astimezone(eastern)
         print(f"[{est_time.isoformat()}] {message.author}: {message.content}")
@@ -435,7 +378,6 @@ async def scan_chat_history(ctx):
 async def scan_to_textfile(ctx):
     channel = ctx.channel
     eastern = ZoneInfo("America/New_York")
-
     with open ("chat_history.txt", 'w') as f:
         async for message in channel.history(limit=None):
             est_time = message.created_at.replace(tzinfo=ZoneInfo("UTC")).astimezone(eastern)
@@ -449,7 +391,6 @@ async def scan_to_textfile(ctx):
 async def delete_bot_chats(ctx):
     channel = ctx.channel
     eastern = ZoneInfo("America/New_York")
-
     async for message in channel.history(limit=None):
         if message.author.bot:
             est_time = message.created_at.replace(tzinfo=ZoneInfo("UTC")).astimezone(eastern)
@@ -468,8 +409,7 @@ async def hello(ctx):
 async def whereami(ctx):
     print(
         f"Seen message in guild={ctx.guild.id}, "
-        f"channel={ctx.channel.id}"
-    )
+        f"channel={ctx.channel.id}")
     await ctx.send("Printed location to logs!")
 
 @bot.command()
@@ -477,11 +417,8 @@ async def whereami(ctx):
 async def delete_youtube_links(ctx):
     channel = ctx.channel
     eastern = ZoneInfo("America/New_York")
-
     async for message in channel.history(limit=None):
-        # Check for YouTube links using your existing regex function
         matches = detect_links.Regex.search_for_youtube_link(message.content)
-
         if matches:
             est_time = message.created_at.replace(tzinfo=ZoneInfo("UTC")).astimezone(eastern)
             print(f"Deleting YouTube link [{est_time.isoformat()}] {message.author}: {message.content}")
@@ -491,42 +428,27 @@ async def delete_youtube_links(ctx):
 @bot.command()
 async def reinstate_video(ctx, url: str = None):
     db = bot.db
-
     # Case 1: Reinstate ALL rejected links
     if url is None:
-        rows = await db.fetch(
-            "SELECT url FROM youtube_links WHERE status = 'rejected'"
-        )
-
+        rows = await db.fetch("SELECT url FROM youtube_links WHERE status = 'rejected'")
         if not rows:
             await ctx.send("No rejected links to reinstate.")
             return
-
         for row in rows:
-            await db.execute(
-                "UPDATE youtube_links SET status='pending_approval' WHERE url=$1",
-                row["url"]
-            )
+            await db.execute("UPDATE youtube_links SET status='pending_approval' WHERE url=$1", row["url"])
             await send_to_review_channel(row["url"])
-
         await ctx.send(f"Reinstated {len(rows)} rejected link(s).")
         return
-
     # Case 2: Reinstate a single URL
-    result = await db.execute(
-        "UPDATE youtube_links SET status='pending_approval' WHERE url=$1 AND status='rejected'",
-        url
-    )
-
+    result = await db.execute("UPDATE youtube_links SET status='pending_approval' WHERE url=$1 AND status='rejected'", url)
     if result.endswith("0"):
         await ctx.send("That link is not in the rejected list.")
         return
-
     await send_to_review_channel(url)
     await ctx.send("Link reinstated and sent for approval.")
 
 # Start the bot with the bot TOKEN and log level as debug
-bot.run(DISCORD_TOKEN, log_handler=handler, log_level=logging.DEBUG, root_logger=True)
+bot.run(DISCORD_TOKEN, root_logger=True)
 
 
 
